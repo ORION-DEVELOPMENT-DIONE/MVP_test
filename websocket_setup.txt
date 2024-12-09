@@ -1,0 +1,28 @@
+sudo apt update
+sudo apt install nodejs npm
+sudo apt update
+sudo apt install nodejs npm
+npm init -y
+npm install ws
+nano server.js
+
+then the sql implementation:
+sudo apt update
+sudo apt install sqlite3
+sqlite3 esp_data.db
+=> inside the SQLite create a table :
+CREATE TABLE energy_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    protocol TEXT,
+    voltage REAL,
+    current REAL,
+    power REAL,
+    total_energy REAL,
+    run_time INTEGER,
+    transmission_attempts INTEGER,
+    transmission_failures INTEGER
+);
+=>install SQLite node.js lib:
+npm install sqlite3
+

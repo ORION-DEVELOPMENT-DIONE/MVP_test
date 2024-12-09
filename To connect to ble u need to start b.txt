@@ -1,0 +1,180 @@
+To connect to ble u need to start by installing this 
+* python 3.10
+sudo apt update
+sudo apt install python3.10 python3.10-venv python3.10-dev
+=> Create aa new virtual environment with python3.10:
+python3.10 -m venv myenv
+source myenv/bin/activate
+=> install :
+pip install pybluez
+then you need to check your esp32 MAC address to connect with wifi 
+using  the bluetoothctl tool to list supported profiles for the device
+[bluetooth]# pair ESP32MACadr
+[bluetooth]# trust ESP32MACadr
+[bluetooth]# connect ESP32MACadr
+if it does not connect run this command 
+sudo rfcomm connect 0 ESP32MACadr &
+and here the script to handle the connection and saves data in an sql file
+import serial
+import json
+import sqlite3
+from datetime import datetime
+import time
+import logging
+
+class SerialBluetoothReceiver:
+    def __init__(self, port='/dev/rfcomm0', baud_rate=115200):
+        self.port = port
+        self.baud_rate = baud_rate
+        self.db_connection = None
+        
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s: %(message)s',
+            filename='bluetooth_receiver.log'
+        )
+        
+        self.setup_database()
+
+    def setup_database(self):
+        """Initialize SQLite database for storing energy metrics"""
+        try:
+            self.db_connection = sqlite3.connect('energy_monitor_serial.db')
+            cursor = self.db_connection.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS serial_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME,
+                    voltage REAL,
+                    current REAL,
+                    power REAL,
+                    energy REAL,
+                    max_current REAL,
+                    max_power REAL,
+                    run_time INTEGER,
+                    transmission_count INTEGER,
+                    transmission_failures INTEGER
+                )
+            ''')
+            self.db_connection.commit()
+            logging.info("Database setup completed successfully")
+        except sqlite3.Error as e:
+            logging.error(f"Database setup error: {e}")
+
+    def parse_metrics(self, data):
+        """Parse incoming JSON data"""
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            logging.warning(f"Invalid JSON received: {data}")
+            return None
+
+    def store_metrics(self, metrics):
+        """Store metrics in SQLite database"""
+        if not metrics:
+            return
+
+        try:
+            cursor = self.db_connection.cursor()
+            cursor.execute('''
+                INSERT INTO serial_metrics (
+                    timestamp, voltage, current, power, energy, 
+                    max_current, max_power, run_time, 
+                    transmission_count, transmission_failures
+                ) VALUES (
+                    datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+            ''', (
+                metrics['voltage'], metrics['current'], 
+                metrics['power'], metrics['energy'], 
+                metrics['max_current'], metrics['max_power'], 
+                metrics['run_time'], metrics['transmission_count'], 
+                metrics['transmission_failures']
+            ))
+            self.db_connection.commit()
+            logging.info(f"Stored serial metrics: {metrics}")
+        except sqlite3.Error as e:
+            logging.error(f"Database insertion error: {e}")
+
+    def connect_and_receive(self):
+        """Connect to serial port and receive data"""
+        try:
+            # Open serial connection
+            ser = serial.Serial(
+                port=self.port, 
+                baudrate=self.baud_rate, 
+                timeout=10
+            )
+            logging.info(f"Connected to serial port {self.port}")
+
+            # Buffer to store incomplete messages
+            buffer = ""
+
+            while True:
+                try:
+                    # Read available data
+                    if ser.in_waiting:
+                        data = ser.read(ser.in_waiting).decode('utf-8')
+                        buffer += data
+
+                        # Process complete JSON messages
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+                            line = line.strip()
+                            
+                            if line:
+                                logging.info(f"Received raw data: {line}")
+                                metrics = self.parse_metrics(line)
+                                
+                                if metrics:
+                                    self.store_metrics(metrics)
+
+                except UnicodeDecodeError:
+                    logging.warning("Unicode decode error. Clearing buffer.")
+                    buffer = ""
+                
+                time.sleep(0.1)  # Small delay to prevent CPU overuse
+
+        except serial.SerialException as e:
+            logging.error(f"Serial connection error: {e}")
+            return False
+        finally:
+            try:
+                ser.close()
+            except:
+                pass
+
+        return True
+
+    def run(self, retry_interval=5):
+        """Continuously attempt to connect and receive data"""
+        while True:
+            try:
+                success = self.connect_and_receive()
+                
+                if not success:
+                    logging.warning(f"Connection failed. Retrying in {retry_interval} seconds...")
+                    time.sleep(retry_interval)
+            
+            except Exception as e:
+                logging.error(f"Unexpected error: {e}")
+                time.sleep(retry_interval)
+
+    def close_connection(self):
+        """Close database connection"""
+        if self.db_connection:
+            self.db_connection.close()
+
+def main():
+    receiver = SerialBluetoothReceiver()
+    try:
+        receiver.run()
+    except KeyboardInterrupt:
+        logging.info("Stopping Serial Bluetooth receiver...")
+    finally:
+        receiver.close_connection()
+
+if __name__ == "__main__":
+    main()
+ 
